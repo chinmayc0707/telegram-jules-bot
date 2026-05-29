@@ -3,8 +3,11 @@ from langchain_openrouter import ChatOpenRouter
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field, ValidationError, create_model
 from psycopg import connect
 import os
+import inspect
 import logging
 import tiktoken
 from dotenv import load_dotenv
@@ -42,7 +45,7 @@ class PersistentAgent:
         self.context_limit = context_limit
         self.preserve_last_k = preserve_last_k
         self.summarization_threshold = int(context_limit * 0.75)
-        self.tools=tools
+        self.tools = self._prepare_tools(tools)
         self.system_message = system_message
         # ── Postgres checkpoint setup ────────────────────────────────
         self.conn = connect(db_uri)
@@ -60,6 +63,94 @@ class PersistentAgent:
             self._encoder = tiktoken.get_encoding("cl100k_base")
         except Exception:
             self._encoder = None
+
+    # ── tool preparation (instructor-style validation) ──────────────
+
+    def _prepare_tools(self, tools: list) -> list:
+        """
+        Wrap raw callables into LangChain ``StructuredTool`` instances
+        with auto-generated Pydantic ``args_schema``.  Tools that are
+        already ``StructuredTool`` or have an ``args_schema`` are kept
+        as-is.
+
+        This mirrors instructor’s approach: every tool call is validated
+        against a strict Pydantic model *before* execution.  Validation
+        errors are returned as strings (not raised), so the LLM sees
+        them as tool output and can self-correct.
+        """
+        prepared: list = []
+        for t in tools:
+            if isinstance(t, StructuredTool) or hasattr(t, "args_schema"):
+                prepared.append(t)
+            elif callable(t):
+                prepared.append(self._create_validated_tool(t))
+            else:
+                prepared.append(t)
+        return prepared
+
+    @staticmethod
+    def _create_validated_tool(func) -> StructuredTool:
+        """
+        Create a ``StructuredTool`` from a plain function.
+
+        1. Inspect the function signature to build a Pydantic model
+           (with proper types and required / optional markers).
+        2. Wrap the function so that:
+           a) args are validated against the model first,
+           b) validation errors are returned as strings,
+           c) runtime exceptions are also returned as strings.
+        This means the LLM *always* gets a tool result — never an
+        unhandled exception — and can retry with better arguments.
+        """
+        sig = inspect.signature(func)
+        fields: dict = {}
+
+        for name, param in sig.parameters.items():
+            ann = (
+                param.annotation
+                if param.annotation is not inspect.Parameter.empty
+                else str
+            )
+            if param.default is not inspect.Parameter.empty:
+                fields[name] = (ann, Field(default=param.default))
+            else:
+                fields[name] = (ann, Field(...))
+
+        ArgsModel = create_model(f"{func.__name__}_Args", **fields)
+
+        def validated_wrapper(**kwargs) -> str:
+            # ---- Pydantic validation (instructor-style) ----
+            try:
+                validated = ArgsModel(**kwargs)
+            except ValidationError as ve:
+                return (
+                    f"[Validation Error] Invalid arguments for "
+                    f"'{func.__name__}': {ve}\n"
+                    "Please check the required parameters and their "
+                    "types, then retry with corrected arguments."
+                )
+
+            # ---- Execute the actual tool ----
+            try:
+                result = func(**validated.model_dump())
+                return str(result)
+            except Exception as exc:
+                return (
+                    f"[Execution Error] '{func.__name__}' raised "
+                    f"{type(exc).__name__}: {exc}\n"
+                    "Analyze the error and retry with different "
+                    "arguments, or inform the user."
+                )
+
+        return StructuredTool.from_function(
+            func=validated_wrapper,
+            name=func.__name__,
+            description=(
+                func.__doc__
+                or f"Call the '{func.__name__}' function."
+            ),
+            args_schema=ArgsModel,
+        )
 
     # ── token helpers ────────────────────────────────────────────────
 
@@ -324,9 +415,8 @@ class PersistentAgent:
 
 
 if __name__=="__main__":
-    import jules_api
-    def evaluate(expression:str):
-        """Python's inbuilt eval function"""
-        return eval(expression)
-    agent=PersistentAgent(system_message="You are a telegram messenger. Telegram doesn't have rendering for markdown. Do not include any formatting in your response like bold, bullets etc",llm=ChatOllama(model="gemma4:e2b"),tools=[eval],context_limit=1_28_000)
+    def evaluate(expression: str) -> str:
+        """Evaluate a mathematical expression. Takes a string like '10*2/2.5*50' and returns the result."""
+        return str(eval(expression))
+    agent=PersistentAgent(system_message="You are a telegram messenger. Telegram doesn't have rendering for markdown. Do not include any formatting in your response like bold, bullets etc",llm=ChatOllama(model="gemma4:e2b"),tools=[evaluate],context_limit=1_28_000)
     print(agent.chat(input("prompt: "),"user1"))
