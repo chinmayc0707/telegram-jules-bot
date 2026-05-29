@@ -219,13 +219,17 @@ class PersistentAgent:
 
     # ── public API ───────────────────────────────────────────────────
 
-    def chat(self, prompt: str, thread_id: str) -> str:
+    def chat(self, prompt: str, thread_id: str, max_retries: int = 3) -> str:
         """
         Send *prompt* to the agent under *thread_id*.
 
         Before invoking, the stored message history is checked for
         orphaned tool calls (repaired automatically) and summarized
         when it exceeds 75 % of the model context window.
+
+        If a tool call fails, the error is fed back to the model as a
+        ToolMessage and the agent is re-invoked so it can retry with a
+        different approach (up to *max_retries* times).
         """
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -256,44 +260,59 @@ class PersistentAgent:
                     config, {"messages": existing_messages}
                 )
 
-        # ── 3. Invoke the agent with the new user message ────────────
-        try:
-            result = self.agent.invoke(
-                {"messages": [HumanMessage(content=prompt)]},
-                config=config,
-            )
-            return result["messages"][-1].content
+        # ── 3. Invoke the agent (with retry on tool errors) ──────────
+        input_messages = {"messages": [HumanMessage(content=prompt)]}
+        last_error = None
 
-        except Exception as e:
-            logger.error("Agent invocation failed: %s", e)
-            error_str = f"{type(e).__name__}: {e}"
-
-            # The checkpoint may now contain an AIMessage with tool_calls
-            # but no ToolMessage.  Repair it with the real error so the
-            # model understands what went wrong on the next turn.
+        for attempt in range(1, max_retries + 1):
             try:
-                state = self.agent.get_state(config)
-                msgs = (
-                    state.values.get("messages", [])
-                    if state and state.values
-                    else []
-                )
-                repaired = self._repair_orphaned_tool_calls(
-                    msgs, error_context=error_str
-                )
-                if len(repaired) != len(msgs):
-                    self.agent.update_state(
-                        config, {"messages": repaired}
-                    )
-                    logger.info(
-                        "Checkpoint repaired after failed invocation."
-                    )
-            except Exception as repair_err:
-                logger.error(
-                    "Failed to repair checkpoint: %s", repair_err
+                result = self.agent.invoke(input_messages, config=config)
+                return result["messages"][-1].content
+
+            except Exception as e:
+                last_error = e
+                error_str = f"{type(e).__name__}: {e}"
+                logger.warning(
+                    "Agent invocation failed (attempt %d/%d): %s",
+                    attempt, max_retries, error_str,
                 )
 
-            return f"Sorry, an error occurred: {e}"
+                # Repair the checkpoint so the model sees the error
+                # as a ToolMessage and can self-correct on retry.
+                try:
+                    state = self.agent.get_state(config)
+                    msgs = (
+                        state.values.get("messages", [])
+                        if state and state.values
+                        else []
+                    )
+                    repaired = self._repair_orphaned_tool_calls(
+                        msgs, error_context=error_str
+                    )
+                    if len(repaired) != len(msgs):
+                        self.agent.update_state(
+                            config, {"messages": repaired}
+                        )
+                        logger.info(
+                            "Checkpoint repaired – retrying invocation."
+                        )
+                except Exception as repair_err:
+                    logger.error(
+                        "Failed to repair checkpoint: %s", repair_err
+                    )
+                    break   # can't recover, stop retrying
+
+                # On retry, don't re-send the user message — the agent
+                # already has it in the checkpoint.  Send an empty list
+                # so it just continues from the repaired state.
+                input_messages = {"messages": []}
+
+        # All retries exhausted
+        logger.error(
+            "Agent failed after %d attempts. Last error: %s",
+            max_retries, last_error,
+        )
+        return f"Sorry, I wasn't able to complete that after {max_retries} attempts."
 
     def clear_chat(self, thread_id: str) -> None:
         """
