@@ -273,6 +273,7 @@ class PersistentAgent:
 
 
 if __name__=="__main__":
+    import jules_api
     def evaluate(expression:str):
         """Python's inbuilt eval function"""
         return eval(expression)
