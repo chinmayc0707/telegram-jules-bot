@@ -1,12 +1,12 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-
+from postgres_agent import PersistentAgent
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
+from langchain_openrouter import ChatOpenRouter
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -65,15 +65,16 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates and echo the message back."""
     update = await request.json()
     logger.info("Received update: %s", update)
-
+    agent=PersistentAgent(system_message="You are a telegram messenger. Do not include any formatting in your response like bold, bullets etc",tools=[],context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]
         text = message.get("text", "")
 
         if text:
+            response=agent.chat(text,chat_id)
             # Echo the received text back to the sender
-            await send_message(chat_id, text)
+            await send_message(chat_id, response)
 
     return JSONResponse(content={"ok": True})
 

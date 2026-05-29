@@ -21,6 +21,7 @@ class PersistentAgent:
         tools=[],
         context_limit: int = 8192,
         preserve_last_k: int = 4,
+        system_message: str = "You are a helpful AI assistant.",
     ):
         """
         Args:
@@ -29,6 +30,7 @@ class PersistentAgent:
             context_limit:   Maximum token context window of the model.
             preserve_last_k: Number of recent messages to keep untouched
                              during summarization.
+            system_message:  Initial system instructions for the agent.
         """
         if llm is None:
             llm = ChatOpenRouter(
@@ -41,6 +43,7 @@ class PersistentAgent:
         self.preserve_last_k = preserve_last_k
         self.summarization_threshold = int(context_limit * 0.75)
         self.tools=tools
+        self.system_message = system_message
         # ── Postgres checkpoint setup ────────────────────────────────
         self.conn = connect(db_uri)
         self.conn.autocommit = True
@@ -49,7 +52,7 @@ class PersistentAgent:
 
         # ── Agent ────────────────────────────────────────────────────
         self.agent = create_react_agent(
-            llm, tools=self.tools, checkpointer=self.checkpointer
+            llm, tools=self.tools, checkpointer=self.checkpointer, prompt=self.system_message
         )
 
         # ── Token encoder (cl100k_base works for most modern models) ─
@@ -273,5 +276,5 @@ if __name__=="__main__":
     def evaluate(expression:str):
         """Python's inbuilt eval function"""
         return eval(expression)
-    agent=PersistentAgent(llm=ChatOllama(model="gemma4:e2b"),tools=[eval],context_limit=1_28_000)
+    agent=PersistentAgent(system_message="You are a telegram messenger. Telegram doesn't have rendering for markdown. Do not include any formatting in your response like bold, bullets etc",llm=ChatOllama(model="gemma4:e2b"),tools=[eval],context_limit=1_28_000)
     print(agent.chat(input("prompt: "),"user1"))
