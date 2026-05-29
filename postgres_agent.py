@@ -300,8 +300,7 @@ class PersistentAgent:
         Delete all checkpoint data for the given *thread_id*,
         effectively wiping the conversation history.
         """
-        config = {"configurable": {"thread_id": thread_id}}
-        self.checkpointer.delete_thread(config)
+        self.checkpointer.delete_thread(thread_id)
         logger.info("Cleared chat history for thread %s", thread_id)
 
 
