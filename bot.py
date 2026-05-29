@@ -88,4 +88,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("bot:app", host="0.0.0.0", port=os.environ.get("PORT", 5000), reload=True)
+    uvicorn.run("bot:app", host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), reload=True)
