@@ -65,7 +65,7 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates and echo the message back."""
     update = await request.json()
     logger.info("Received update: %s", update)
-    agent=PersistentAgent(system_message="You are a telegram messenger. Do not include any formatting in your response like bold, bullets etc",tools=[],context_limit=1_28_000)
+    agent=PersistentAgent(system_message="You are a telegram messenger. Strictly do not include any formatting in your response like bold, bullets etc",tools=[],context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]
