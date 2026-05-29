@@ -61,7 +61,7 @@ class JulesClient:
         self, 
         prompt: str, 
         source_name: str, 
-        branch: str,
+        branch: str="main",
         title: Optional[str] = None, 
          
         automation_mode: str = "AUTO_CREATE_PR", 

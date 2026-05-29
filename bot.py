@@ -71,7 +71,7 @@ async def webhook(request: Request):
         get_jules_session_status, 
         approve_jules_plan, 
         send_jules_message]
-    agent=PersistentAgent(tools=tools,system_message="You are a telegram messenger. Strictly do not include any formatting in your response like bold, bullets etc",context_limit=1_28_000)
+    agent=PersistentAgent(tools=tools,system_message="You are an expert developer agent capable of using the Jules API to automate software development tasks in GitHub repositories. You can list sources, create sessions, check status, and interact with the agent.",context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]
