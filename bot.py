@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from langchain_openrouter import ChatOpenRouter
+from jules_api import list_jules_sources,create_jules_session,get_jules_session_status,approve_jules_plan,send_jules_message
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -65,14 +66,22 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates and echo the message back."""
     update = await request.json()
     logger.info("Received update: %s", update)
-    agent=PersistentAgent(system_message="You are a telegram messenger. Strictly do not include any formatting in your response like bold, bullets etc",tools=[],context_limit=1_28_000)
+    tools=[list_jules_sources, 
+        create_jules_session, 
+        get_jules_session_status, 
+        approve_jules_plan, 
+        send_jules_message]
+    agent=PersistentAgent(tools=tools,system_message="You are a telegram messenger. Strictly do not include any formatting in your response like bold, bullets etc",tools=[],context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]
         text = message.get("text", "")
 
-        if text:
-            response=agent.chat(text,chat_id)
+        if text == "/clear":
+            agent.clear_chat(str(chat_id))
+            await send_message(chat_id, "Chat history cleared.")
+        elif text:
+            response=agent.chat(text,str(chat_id))
             # Echo the received text back to the sender
             await send_message(chat_id, response)
 

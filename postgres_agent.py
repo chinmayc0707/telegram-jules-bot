@@ -137,12 +137,20 @@ class PersistentAgent:
 
     # ── orphaned tool-call repair ────────────────────────────────────
 
-    def _repair_orphaned_tool_calls(self, messages: list) -> list:
+    def _repair_orphaned_tool_calls(
+        self, messages: list, error_context: str | None = None
+    ) -> list:
         """
         Scan the message history for AIMessages whose ``tool_calls`` have
         no matching ToolMessage in the messages that follow.  For every
-        orphan, inject a synthetic ToolMessage with an error payload so
-        that LangGraph/LLM providers don't reject the history.
+        orphan, inject a synthetic ToolMessage with the actual error so
+        the model understands what went wrong.
+
+        Args:
+            messages:      The current message list.
+            error_context: If provided, the real error/traceback text to
+                           include in the injected ToolMessage so the LLM
+                           can learn from it.
 
         Returns a new list (the original is not mutated).
         """
@@ -169,19 +177,32 @@ class PersistentAgent:
             for tc in tool_calls:
                 tc_id = tc.get("id") or tc.get("tool_call_id", "")
                 if tc_id and tc_id not in existing_tool_msg_ids:
-                    # Orphan detected – inject a placeholder ToolMessage
+                    tool_name = tc.get("name", "unknown")
+                    tool_args = tc.get("args", {})
+                    # Orphan detected – inject a ToolMessage with real error
                     logger.warning(
                         "Repairing orphaned tool call %s (%s)",
                         tc_id,
-                        tc.get("name", "unknown"),
+                        tool_name,
                     )
+
+                    if error_context:
+                        error_body = (
+                            f"Tool '{tool_name}' called with args {tool_args} "
+                            f"raised an error:\n{error_context}\n\n"
+                            "Please analyze what went wrong and either retry "
+                            "with corrected arguments or inform the user."
+                        )
+                    else:
+                        error_body = (
+                            f"Tool '{tool_name}' called with args {tool_args} "
+                            "failed before producing a result. The error was "
+                            "not captured. You may retry or inform the user."
+                        )
+
                     repaired.append(
                         ToolMessage(
-                            content=(
-                                "[Error] Tool call failed before producing a "
-                                "result. The error has been handled; you may "
-                                "retry or continue the conversation."
-                            ),
+                            content=f"[Error] {error_body}",
                             tool_call_id=tc_id,
                         )
                     )
@@ -245,10 +266,11 @@ class PersistentAgent:
 
         except Exception as e:
             logger.error("Agent invocation failed: %s", e)
+            error_str = f"{type(e).__name__}: {e}"
 
             # The checkpoint may now contain an AIMessage with tool_calls
-            # but no ToolMessage.  Repair it so the *next* call doesn't
-            # hit INVALID_CHAT_HISTORY.
+            # but no ToolMessage.  Repair it with the real error so the
+            # model understands what went wrong on the next turn.
             try:
                 state = self.agent.get_state(config)
                 msgs = (
@@ -256,7 +278,9 @@ class PersistentAgent:
                     if state and state.values
                     else []
                 )
-                repaired = self._repair_orphaned_tool_calls(msgs)
+                repaired = self._repair_orphaned_tool_calls(
+                    msgs, error_context=error_str
+                )
                 if len(repaired) != len(msgs):
                     self.agent.update_state(
                         config, {"messages": repaired}
@@ -270,6 +294,15 @@ class PersistentAgent:
                 )
 
             return f"Sorry, an error occurred: {e}"
+
+    def clear_chat(self, thread_id: str) -> None:
+        """
+        Delete all checkpoint data for the given *thread_id*,
+        effectively wiping the conversation history.
+        """
+        config = {"configurable": {"thread_id": thread_id}}
+        self.checkpointer.delete_thread(config)
+        logger.info("Cleared chat history for thread %s", thread_id)
 
 
 if __name__=="__main__":
