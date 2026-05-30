@@ -1,226 +1,198 @@
 import requests
 import os
-from typing import List, Dict, Any, Optional
+import json
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class JulesClient:
-    """
-    Client for interacting with the Google Jules API.
-    """
+    """Client for the Google Jules API."""
+
     BASE_URL = "https://jules.googleapis.com/v1alpha"
+    _instance: Optional["JulesClient"] = None
+
+    def __new__(cls, *args, **kwargs):
+        """Singleton – reuse the same client across tool calls."""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self, api_key: Optional[str] = None):
-        """
-        Initializes the JulesClient with the necessary authentication.
-
-        Args:
-            api_key (Optional[str]): The Google API key for Jules. If not provided, 
-                                     the client looks for the 'JULES_API_KEY' environment variable.
-        """
-        self.api_key = api_key or os.getenv('JULES_API_KEY')
+        if hasattr(self, "_initialized"):
+            return
+        self.api_key = api_key or os.getenv("JULES_API_KEY")
         if not self.api_key:
-            raise ValueError("JULES_API_KEY environment variable is not set and no api_key provided.")
-        
+            raise ValueError(
+                "JULES_API_KEY environment variable is not set and no api_key provided."
+            )
         self.headers = {
             "X-Goog-Api-Key": self.api_key,
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
+        self._initialized = True
 
-    def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, data: Optional[Dict] = None) -> Dict[str, Any]:
-        """
-        A helper method to handle HTTP requests to the Jules API.
-
-        Args:
-            method (str): The HTTP method to use (e.g., 'GET', 'POST', 'PUT', 'DELETE').
-            endpoint (str): The API endpoint relative to the BASE_URL.
-            params (Optional[Dict]): Query parameters to append to the URL.
-            data (Optional[Dict]): JSON body to send in the request.
-
-        Returns:
-            Dict[str, Any]: The parsed JSON response from the API.
-        """
+    def _request(self, method, endpoint, params=None, data=None):
         url = f"{self.BASE_URL}/{endpoint.lstrip('/')}"
-        response = requests.request(method, url, headers=self.headers, params=params, json=data)
-        response.raise_for_status()
-        return response.json()
+        resp = requests.request(
+            method, url, headers=self.headers, params=params, json=data
+        )
+        resp.raise_for_status()
+        return resp.json()
 
-    def list_sources(self) -> Dict[str, Any]:
-        """
-        Retrieve the list of available sources connected to the account.
+    # ── raw API methods ──────────────────────────────────────────────
 
-        Returns:
-            Dict[str, Any]: A dictionary containing the list of available sources, 
-                             typically including GitHub repository identifiers.
-        """
+    def list_sources(self):
         return self._request("GET", "sources")
 
     def create_session(
-        self, 
-        prompt: str, 
-        source_name: str, 
-        branch: str="main",
-        title: Optional[str] = None, 
-         
-        automation_mode: str = "AUTO_CREATE_PR", 
-        require_plan_approval: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Creates a new session for Jules to work on.
-        
-        Args:
-            prompt (str): The detailed natural language instruction telling Jules what task to perform (e.g., "Fix the bug in the login logic").
-            source_name (str): The unique identifier of the connected source, typically in the format 'sources/github/{owner}/{repo}'.
-            branch (str): The GitHub branch that Jules should use as the starting point for the work (e.g., 'main', 'develop').
-            title (Optional[str]): An optional descriptive name for the session. If not provided, the prompt is used as the title.
-            automation_mode (str): Defines how Jules should finalize the work. 'AUTO_CREATE_PR' tells Jules to automatically open a Pull Request upon completion.
-            require_plan_approval (bool): If True, Jules will generate a plan and wait for a call to `approve_plan` before modifying any code. Defaults to False.
-        """
+        self,
+        prompt,
+        source_name,
+        branch,
+        title=None,
+        automation_mode="AUTO_CREATE_PR",
+        require_plan_approval=False,
+    ):
         data = {
             "prompt": prompt,
             "sourceContext": {
                 "source": source_name,
-                "githubRepoContext": {
-                    "startingBranch": branch
-                }
+                "githubRepoContext": {"startingBranch": branch},
             },
             "automationMode": automation_mode,
             "title": title or prompt,
-            "requirePlanApproval": require_plan_approval
+            "requirePlanApproval": require_plan_approval,
         }
         return self._request("POST", "sessions", data=data)
 
-    def list_sessions(self, page_size: int = 10) -> Dict[str, Any]:
-        """
-        Lists recently created sessions.
+    def list_sessions(self, page_size=10):
+        return self._request("GET", "sessions", params={"pageSize": page_size})
 
-        Args:
-            page_size (int): The maximum number of session objects to return in a single response. Defaults to 10.
-        """
-        params = {"pageSize": page_size}
-        return self._request("GET", "sessions", params=params)
-
-    def get_session(self, session_id: str) -> Dict[str, Any]:
-        """
-        Retrieve details of a specific session by its ID.
-
-        Args:
-            session_id (str): The unique identifier of the session (e.g., 'sessions/{id}').
-
-        Returns:
-            Dict[str, Any]: The session object containing status, prompt, and output details.
-        """
-        # Assuming endpoint is /sessions/{id} based on common Google API patterns
+    def get_session(self, session_id):
         return self._request("GET", f"sessions/{session_id}")
 
-    def approve_plan(self, session_id: str) -> Dict[str, Any]:
-        """
-        Approve the execution plan generated by Jules for a specific session.
-        This allows Jules to proceed with the actual code modifications.
-
-        Args:
-            session_id (str): The unique identifier of the session to approve.
-
-        Returns:
-            Dict[str, Any]: The response from the API confirming the approval.
-        """
-        # Based on the prompt snippet "Step 4: Approve plan"
+    def approve_plan(self, session_id):
         return self._request("POST", f"sessions/{session_id}:approvePlan")
 
-    def list_activities(self, session_id: str, page_size: int = 20) -> Dict[str, Any]:
-        """
-        List activities within a specific session.
-
-        Args:
-            session_id (str): The unique identifier of the session (e.g., 'sessions/{id}').
-            page_size (int): The maximum number of activity items to return in a single response. Defaults to 20.
-        """
-        params = {"pageSize": page_size}
-        return self._request("GET", f"sessions/{session_id}/activities", params=params)
-
-    def send_message(self, session_id: str, message: str) -> Dict[str, Any]:
-        """
-        Send a follow-up message to an existing session.
-
-        Args:
-            session_id (str): The unique identifier of the session to message.
-            message (str): The text of the feedback or additional instruction to provide to Jules.
-        """
+    def send_message(self, session_id, message):
         data = {"message": message}
-        return self._request("POST", f"sessions/{session_id}:sendMessage", data=data)
+        return self._request(
+            "POST", f"sessions/{session_id}:sendMessage", data=data
+        )
 
-# --- Wrapper functions for easy tool usage by LLM agents ---
+
+# ── helpers for clean LLM output ─────────────────────────────────────────
+
+
+def _clean_id(name: str) -> str:
+    """'sessions/abc123' → 'abc123'"""
+    return name.rsplit("/", 1)[-1] if "/" in name else name
+
+
+def _fmt_source(src: dict) -> str:
+    name = src.get("name", "?")
+    repo = src.get("githubRepoContext", {}).get("repoFullName", "")
+    return f"• {name}" + (f"  ({repo})" if repo else "")
+
+
+def _fmt_session_summary(s: dict) -> str:
+    """One-line session digest the LLM can reason over."""
+    sid = _clean_id(s.get("name", "?"))
+    status = s.get("status", "UNKNOWN")
+    title = s.get("title", "")
+    pr = s.get("pullRequestUrl", "")
+    parts = [f"id={sid}", f"status={status}"]
+    if title:
+        parts.append(f"title={title}")
+    if pr:
+        parts.append(f"pr={pr}")
+    return " | ".join(parts)
+
+
+# ── tool functions (exposed to the LLM) ──────────────────────────────────
+
 
 def list_jules_sources() -> str:
-    """
-    Retrieve the list of available GitHub sources connected to Jules.
-    
-    Returns:
-        str: A string representation of the list of available sources.
-    """
-    client = JulesClient()
-    return str(client.list_sources())
+    """List all GitHub repositories connected to Jules."""
+    data = JulesClient().list_sources()
+    sources = data.get("sources", [])
+    if not sources:
+        return "No sources connected."
+    lines = [_fmt_source(s) for s in sources]
+    return "Connected sources:\n" + "\n".join(lines)
 
-def create_jules_session(prompt: str, source_name: str, title: Optional[str] = None) -> str:
-    """
-    Create a new Jules session to perform a task in a repository.
+
+def create_jules_session(
+    prompt: str,
+    source_name: str,
+    branch: str = "main",
+    title: str = "",
+) -> str:
+    """Create a Jules session to run a task on a repo.
 
     Args:
-        prompt (str): The detailed instruction for Jules.
-        source_name (str): The unique identifier of the source (e.g., 'sources/github/bobalover/boba').
-        title (Optional[str]): An optional title for the session.
-
-    Returns:
-        str: A string representation of the created session object.
+        prompt: Detailed instruction for Jules (what to build/fix).
+        source_name: Source identifier, e.g. 'sources/github/owner/repo'.
+        branch: Starting branch (default 'main').
+        title: Short title for the session.
     """
-    client = JulesClient()
-    return str(client.create_session(prompt=prompt, source_name=source_name, title=title))
+    s = JulesClient().create_session(
+        prompt=prompt,
+        source_name=source_name,
+        branch=branch,
+        title=title or None,
+    )
+    return f"Session created: {_fmt_session_summary(s)}"
+
 
 def get_jules_session_status(session_id: str) -> str:
-    """
-    Check the current status and outputs of a Jules session.
+    """Check the current status of a Jules session.
 
     Args:
-        session_id (str): The ID of the session to query.
-
-    Returns:
-        str: A string representation of the session's current state.
+        session_id: The session ID (with or without 'sessions/' prefix).
     """
-    client = JulesClient()
-    # strip 'sessions/' prefix if present
     sid = session_id.replace("sessions/", "")
-    return str(client.get_session(sid))
+    s = JulesClient().get_session(sid)
+
+    status = s.get("status", "UNKNOWN")
+    title = s.get("title", "")
+    pr = s.get("pullRequestUrl", "")
+    plan = s.get("plan", {}).get("description", "")
+
+    lines = [f"Session {sid}: {status}"]
+    if title:
+        lines.append(f"Title: {title}")
+    if plan:
+        lines.append(f"Plan: {plan}")
+    if pr:
+        lines.append(f"PR: {pr}")
+    return "\n".join(lines)
+
 
 def approve_jules_plan(session_id: str) -> str:
-    """
-    Approve the plan for a Jules session to start execution.
+    """Approve the plan so Jules starts writing code.
 
     Args:
-        session_id (str): The ID of the session whose plan needs approval.
-
-    Returns:
-        str: A string representation of the API response.
+        session_id: The session ID (with or without 'sessions/' prefix).
     """
-    client = JulesClient()
     sid = session_id.replace("sessions/", "")
-    return str(client.approve_plan(sid))
+    s = JulesClient().approve_plan(sid)
+    return f"Plan approved for session {sid}. Status: {s.get('status', 'UNKNOWN')}"
+
 
 def send_jules_message(session_id: str, message: str) -> str:
-    """
-    Send a message to an active Jules session to provide feedback or new instructions.
+    """Send follow-up instructions or feedback to an active Jules session.
 
     Args:
-        session_id (str): The ID of the session to send the message to.
-        message (str): The text content of the message.
-
-    Returns:
-        str: A string representation of the API response.
+        session_id: The session ID (with or without 'sessions/' prefix).
+        message: The feedback or instruction text.
     """
-    client = JulesClient()
     sid = session_id.replace("sessions/", "")
-    return str(client.send_message(sid, message))
+    JulesClient().send_message(sid, message)
+    return f"Message sent to session {sid}."
 
 
 def get_github_repos(owner: Optional[str] = None) -> str:
@@ -271,8 +243,7 @@ def get_github_branches(owner: str, repo: str) -> str:
 if __name__=="__main__":
     import postgres_agent
     from langchain_openrouter import ChatOpenRouter
-    
-    # Define tools available to the agent
+
     jules_tools = [
         list_jules_sources, 
         create_jules_session, 
@@ -282,14 +253,18 @@ if __name__=="__main__":
         get_github_repos,
         get_github_branches
     ]
-    
+
     agent = postgres_agent.PersistentAgent(
         tools=jules_tools,
         llm=ChatOpenRouter(
             model="google/gemma-4-31b-it:free",
-            api_key=os.getenv('OPEN_ROUTER_API')
+            api_key=os.getenv("OPEN_ROUTER_API"),
         ),
-        system_message="You are an expert developer agent capable of using the Jules API to automate software development tasks in GitHub repositories. You can list sources, create sessions, check status, and interact with the agent."
+        system_message=(
+            "You are a developer agent that uses the Jules API to automate "
+            "software tasks on GitHub repos. You can list sources, create "
+            "sessions, check status, approve plans, and send messages."
+        ),
     )
-    
+
     print(agent.chat(input("prompt: "), "user2"))
