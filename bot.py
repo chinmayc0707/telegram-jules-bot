@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from langchain_openrouter import ChatOpenRouter
-from jules_api import list_jules_sources,create_jules_session,get_jules_session_status,approve_jules_plan,send_jules_message
+from jules_api import list_jules_sources,create_jules_session,get_jules_session_status,approve_jules_plan,send_jules_message,get_github_repos,get_github_branches
 load_dotenv()
 
 
@@ -129,6 +129,14 @@ async def webhook(request: Request):
     """Handle incoming Telegram updates and echo the message back."""
     update = await request.json()
     logger.info("Received update: %s", update)
+    tools=[list_jules_sources, 
+        create_jules_session, 
+        get_jules_session_status, 
+        approve_jules_plan, 
+        send_jules_message,
+        get_github_repos,
+        get_github_branches]
+    agent=PersistentAgent(tools=tools,system_message="You are an expert developer agent capable of using the Jules API to automate software development tasks in GitHub repositories. You can list sources, create sessions, check status, and interact with the agent.",context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]

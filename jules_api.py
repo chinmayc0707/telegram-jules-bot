@@ -195,16 +195,63 @@ def send_jules_message(session_id: str, message: str) -> str:
     return f"Message sent to session {sid}."
 
 
-if __name__ == "__main__":
+def get_github_repos(owner: Optional[str] = None) -> str:
+    """
+    Fetch repositories from GitHub.
+
+    Args:
+        owner (Optional[str]): The GitHub username or organization name. If None, fetches the authenticated user's repositories.
+
+    Returns:
+        str: A string representation of the retrieved list of repositories.
+    """
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    if owner:
+        url = f"https://api.github.com/users/{owner}/repos"
+    else:
+        url = "https://api.github.com/user/repos"
+
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return str(response.json())
+
+def get_github_branches(owner: str, repo: str) -> str:
+    """
+    Fetch branches from a specific GitHub repository.
+
+    Args:
+        owner (str): The GitHub username or organization name.
+        repo (str): The name of the repository.
+
+    Returns:
+        str: A string representation of the retrieved list of branches.
+    """
+    headers = {"Accept": "application/vnd.github.v3+json"}
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    url = f"https://api.github.com/repos/{owner}/{repo}/branches"
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    return str(response.json())
+
+if __name__=="__main__":
     import postgres_agent
     from langchain_openrouter import ChatOpenRouter
 
     jules_tools = [
-        list_jules_sources,
-        create_jules_session,
-        get_jules_session_status,
-        approve_jules_plan,
+        list_jules_sources, 
+        create_jules_session, 
+        get_jules_session_status, 
+        approve_jules_plan, 
         send_jules_message,
+        get_github_repos,
+        get_github_branches
     ]
 
     agent = postgres_agent.PersistentAgent(
