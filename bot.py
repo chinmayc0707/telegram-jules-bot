@@ -93,17 +93,42 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Telegram Echo Bot", lifespan=lifespan)
 
 
+SYSTEM_PROMPT = (
+    "You are a developer assistant on Telegram that automates GitHub tasks "
+    "via the Jules API. Keep replies short and plain-text (no markdown).\n\n"
+    "WORKFLOW:\n"
+    "1. list_jules_sources → find the right repo\n"
+    "2. create_jules_session → give Jules a task\n"
+    "3. get_jules_session_status → poll until done\n"
+    "4. approve_jules_plan → if plan approval was requested\n"
+    "5. send_jules_message → send follow-up feedback\n\n"
+    "RULES:\n"
+    "- Always confirm the source_name with list_jules_sources before creating a session.\n"
+    "- Report session IDs and PR links back to the user.\n"
+    "- If a tool returns an error, explain it simply and suggest next steps.\n"
+    "- Never output raw JSON or dicts to the user."
+)
+
+JULES_TOOLS = [
+    list_jules_sources,
+    create_jules_session,
+    get_jules_session_status,
+    approve_jules_plan,
+    send_jules_message,
+]
+
+agent = PersistentAgent(
+    tools=JULES_TOOLS,
+    system_message=SYSTEM_PROMPT,
+    context_limit=128_000,
+)
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     """Handle incoming Telegram updates and echo the message back."""
     update = await request.json()
     logger.info("Received update: %s", update)
-    tools=[list_jules_sources, 
-        create_jules_session, 
-        get_jules_session_status, 
-        approve_jules_plan, 
-        send_jules_message]
-    agent=PersistentAgent(tools=tools,system_message="You are an expert developer agent capable of using the Jules API to automate software development tasks in GitHub repositories. You can list sources, create sessions, check status, and interact with the agent.",context_limit=1_28_000)
     message = update.get("message")
     if message:
         chat_id = message["chat"]["id"]
